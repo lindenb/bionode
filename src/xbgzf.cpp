@@ -54,6 +54,8 @@ public:
 
     	NODE_SET_PROTOTYPE_METHOD(s_ct, "close", Close);
 	NODE_SET_PROTOTYPE_METHOD(s_ct, "read", Read);
+	NODE_SET_PROTOTYPE_METHOD(s_ct, "getc", Getc);
+	NODE_SET_PROTOTYPE_METHOD(s_ct, "readCString", ReadCString);
     	target->Set(String::NewSymbol("bgzf"), s_ct->GetFunction());
   	}
 
@@ -109,6 +111,49 @@ public:
     HandleScope scope;
     BGZFSupport* instance = ObjectWrap::Unwrap<BGZFSupport>(args.This());
     Local<Integer> result = Integer::New(instance->close()); ;
+    return scope.Close(result);
+    }
+
+ static Handle<Value> Getc(const Arguments& args)
+    {
+    int ret=EOF;
+    HandleScope scope;
+    BGZFSupport* instance = ObjectWrap::Unwrap<BGZFSupport>(args.This());
+    if(instance->file!=NULL)
+    	{
+    	ret= ::bgzf_getc(instance->file);
+    	}
+    Local<Integer> result = Integer::New(ret); ;
+    return scope.Close(result);
+    }
+
+
+ static Handle<Value> ReadCString(const Arguments& args)
+    {
+    HandleScope scope;
+    BGZFSupport* instance = ObjectWrap::Unwrap<BGZFSupport>(args.This());
+    if(instance->file!=NULL) RETURN_THROW("bgzf file has been closed");
+    int c;
+    std::string s;
+    while((c= ::bgzf_getc(instance->file))!=EOF && c!='\0')
+    	{
+    	s.append((char)c);
+    	}
+    	
+    Local<Integer> result = String::New(s.data(),s.size()); ;
+    return scope.Close(result);
+    }
+
+ static Handle<Value> Getc(const Arguments& args)
+    {
+    int ret=-1;
+    HandleScope scope;
+    BGZFSupport* instance = ObjectWrap::Unwrap<BGZFSupport>(args.This());
+    if(instance->file!=NULL)
+    	{
+    	ret= ::bgzf_getc(instance->file);
+    	}
+    Local<Integer> result = Integer::New(ret); ;
     return scope.Close(result);
     }
 

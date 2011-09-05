@@ -58,8 +58,63 @@ BamReader.prototype.close = function()
  	return this.fd.close();
 	};
 
+BamReader.prototype.next = function() 
+	{
+	
+	/* block size */
+	var b=new Buffer(4);
+	var n = this.fd.read(b,0,4);
+	if(n==0) return null;//EOF met
+	
+	var align={};
+	
+	if(n!=4) throw new Error("Cannot read 4 bytes");
+	var block_size=b.readInt32LE(0);
+	
+	/* refID */
+	b=new Buffer(32);
+	n = this.fd.read(b,0,32);
+	if(n!=32) throw new Error("Cannot read 32 bytes.");
+	align.refID = b.readInt32LE(0);
+	align.pos = b.readInt32LE(4);
+	/* bin_mq_nl */
+	var byte2= b.readUInt32LE(8);
+	align.bin = byte2 >> 16;
+	align.mq = byte2 >>8&0xff;
+	align.name_len = byte2&0xff;
+	/* flag nc */
+	var byte3= b.readInt32LE(12);
+	align.flag = byte3 >>16;
+	align.n_cigar = byte3&0xffff;
+	/* l_seq */
+	align.l_qseq = b.readInt32LE(16);
+	/* next refID */
+	align.next_refID = b.readInt32LE(20);
+	/* next_pos */
+	align.next_pos = b.readInt32LE(24);
+	/* tlen */
+	align.tlen = b.readInt32LE(28);
+	
+	/* read name */
+	var data_len= block_size - 32;
+	b=new Buffer( data_len);
+	n = this.fd.read(b,0, data_len);
+	if(n!= data_len) throw new Error("Cannot read "+ data_len+" bytes.");
+	align.read_name = b.toString('ascii',0, align.name_len-1);
+	
+	/* cigar */
+	align.cigar= b.slice(align.name_len,align.name_len+4*(align.n_cigar));
+	
+ 	return align;
+	};
+
 
 console.log(BamReader);
 var r=new BamReader("/home/lindenb/samtools-0.1.17/examples/toy.bam");
+var a;
+while((a=r.next())!=null)
+	{
+	console.log(a);
+	}
 console.log(r.close());
 console.log("DONE");

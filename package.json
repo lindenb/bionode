@@ -1,0 +1,17 @@
+{
+  "author": "Pierre Lindenbaum <plindenbaum@yahoo.fr> (http://plindenbaum.blogspot.com)",
+  "name": "bio",
+  "description": "Bioinformatics functions for node.js",
+  "version": "0.1.0",
+  "homepage": "https://github.com/lindenb/bionode",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/lindenb/bionode.git"
+  },
+  "engines": {
+    "node": "~v0.5.5"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+  "main":"./lib/index.js"
+}
