@@ -111,10 +111,14 @@ BamReader.prototype.next = function()
 
 console.log(BamReader);
 var r=new BamReader("/home/lindenb/samtools-0.1.17/examples/toy.bam");
-var a;
-while((a=r.next())!=null)
+var align;
+while((align=r.next())!=null)
 	{
-	console.log(a);
+	console.log(
+		r.references[align.refID].name+"\t"+
+		align.read_name+"\t"+
+		align.pos
+		);
 	}
 console.log(r.close());
 console.log("DONE");
