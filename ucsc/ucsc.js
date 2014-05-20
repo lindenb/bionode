@@ -1,7 +1,15 @@
+/**
+ * Author: Pierre Lindenbaum PhD
+ * Date:   2014
+ * Motivation: REST API for the UCSC mysql server
+ */
 var mysql = require('mysql');
 var http = require('http');
 var restify = require('restify');
-var ucscSchema={};
+
+
+
+/** initial connection pool */
 var connectionPool = mysql.createPool({
   host : 'genome-mysql.cse.ucsc.edu',
   port : 3306,
@@ -11,15 +19,22 @@ var connectionPool = mysql.createPool({
   
  });
 
-function PrintRows(res)
+/** call used to print data */
+function PrintRows(res /* output stream */)
 	{
 	this.res=res;
 	this.count=0;
+	this.callback=null;
 	}
+	
+	
+/* print the next row */
 PrintRows.prototype.next=function(r)
 	{
 	if(this.count==0)
 		{
+		this.res.writeHead(200, {"Content-Type":(this.callback? "application/javascript" : "application/json")});
+		if(this.callback!=null) this.res.write(this.callback+"(");
 		this.res.write("[\n");
 		}
 	else
@@ -29,34 +44,47 @@ PrintRows.prototype.next=function(r)
 	this.res.write(JSON.stringify(r));
 	this.count++;
 	};
+/* called when end of query */
 PrintRows.prototype.close=function()
 	{
-	if(this.count==0) this.res.write("[\n");
+	if(this.count==0)
+		{
+		this.res.writeHead(200, {"Content-Type":(this.callback? "application/javascript" : "application/json")});
+		if(this.callback!=null) this.res.write(this.callback+"(");
+		this.res.write("[\n");
+		}
 	if(this.count>0) this.res.write("\n");
-	this.res.end("]");
+	this.res.write("]");
+	if(this.callback!=null) this.res.write(");");
+	this.res.end();
 	};
-	
+
+/* called on error */
 PrintRows.prototype.error=function(err)
 	{
 	this.res.status(500);
 	this.res.end(""+err);
 	};
 
-
+/* class used to cache the SCHEMA of a database.table */
 function Schema(database,table)
 	{
 	this.database=database;
 	this.table=table;
+	/* list of fields */
 	this.fields=[];
 	}
 
+/** cache for table descriptions */
 Schema.ALL={};
 
+/** qualified name for this database.table */
 Schema.prototype.getQName=function()
 	{
 	return this.database+"."+this.table;
 	};
 
+/** get field by name */
 Schema.prototype.getFieldByName=function(column)
 	{
 	if(column==null) return null;
@@ -68,29 +96,36 @@ Schema.prototype.getFieldByName=function(column)
 	return null;
 	};
 
+/**  return the field 'chrom' */
 Schema.prototype.getChrom=function()
 	{
-	return this.getFieldByName("chrom");
+	return this.getFieldByName("chrom") || this.getFieldByName("tName");
 	};
+/**  return the field 'start' */
 Schema.prototype.getChromStart=function()
 	{
 	var f= this.getFieldByName("chromStart");
 	if(f==null) f= this.getFieldByName("txStart");
 	if(f==null) f= this.getFieldByName("cdsStart");
+	if(f==null) f= this.getFieldByName("tStart");
 	return f;
 	};
+/**  return the field 'end' */
 Schema.prototype.getChromEnd=function()
 	{
 	var f= this.getFieldByName("chromEnd");
 	if(f==null) f= this.getFieldByName("txEnd");
 	if(f==null) f= this.getFieldByName("cdsEnd");
+	if(f==null) f= this.getFieldByName("tEnd");
 	return f;
 	};
+/**  return wether table contain chrom/start/end */
 Schema.prototype.isGenomicRange=function()
 	{
 	return this.getChrom()!=null && this.getChromStart()!=null && this.getChromEnd()!=null;
 	};
 
+/* return true if field is indexed */
 Schema.prototype.hasIndex=function(column)
 	{
 	var field= this.getFieldByName(column);
@@ -102,7 +137,7 @@ Schema.prototype.toString=function()
 	return JSON.stringify(this);
 	};
 
-
+/* UCSC bin array generator */
 Schema.reg2bins=function(beg,end)
 	{
 	var list=[];
@@ -119,12 +154,35 @@ Schema.reg2bins=function(beg,end)
 	return list;
 	}
 
-
-Schema.prototype.selectByRange=function(range,res)
+/** return comma-separated list of field for select */
+Schema.prototype.selectFields=function()
 	{
+	var sql="";
+	for(var c in this.fields)
+		{
+		var f=this.fields[c];
+		if(sql.length!=0) sql+=",";
+		if(f.type.indexOf("blob")!=-1)
+			{
+			sql+="CONVERT("+f.name+"  USING utf8) as `"+f.name+"`" ;
+			}
+		else
+			{
+			sql+=f.name;
+			}
+		}
+	return sql;
+	}
+
+/** return data by genomic range */
+Schema.prototype.selectByRange=function(range,callback,res)
+	{
+	
 	var table=this;
 	var qName=this.getQName();
 	var printer=new PrintRows(res);
+	printer.callback=callback;
+
 	if(!this.isGenomicRange())
 		{
 		printer.error(this.getQName()+" is not genomic range");
@@ -142,7 +200,9 @@ Schema.prototype.selectByRange=function(range,res)
 		
 		
 		
-		var sql="select * from "+table.getQName() + " where "
+		var sql="select ";
+		sql+= table.selectFields();
+		sql+=" from "+table.getQName() + " where "
 				+table.getChrom().name+" = ?"+
 				" AND NOT(? < "+table.getChromStart().name+" OR ? >="+table.getChromEnd().name+")"
 				;
@@ -187,11 +247,13 @@ Schema.prototype.selectByRange=function(range,res)
 		});
 	}
 
-
-Schema.prototype.selectByColumn=function(column,value,res)
+/** return data by indexed column */
+Schema.prototype.selectByColumn=function(column,value,callback,res)
 	{
+	var thisSchema=this;
 	var qName=this.getQName();
 	var printer=new PrintRows(res);
+	printer.callback=callback;
 	if(!this.hasIndex(column))
 		{
 		printer.error(this.getQName()+" has no indexed column "+column+" ");
@@ -207,7 +269,7 @@ Schema.prototype.selectByColumn=function(column,value,res)
 			return;
 			}
 		
-		var query= connection.query("select * from "+qName+ " where "+column+"=?",[value]);
+		var query= connection.query("select "+ thisSchema.selectFields()+" from "+qName+ " where "+column+"=?",[value]);
 		
 		query.on('error',function(err)
 			{
@@ -230,6 +292,8 @@ Schema.prototype.selectByColumn=function(column,value,res)
 		});
 	}
 
+
+/** fetch data schema */
 Schema.get=function(table,callback)
 	{
 	if(table.getQName() in Schema.ALL)
@@ -294,8 +358,91 @@ server.use(restify.queryParser());
 server.use(restify.bodyParser());
 server.use(restify.CORS());/* Cross-origin resource sharing */
 
+
+/** get all databases */
+server.get('/schemas/databases', function(req,res,next)
+	{
+	var printer=new PrintRows(res);
+	printer.callback=req.params.callback;
+	console.log("getting databases list");
+	connectionPool.getConnection(function(err,connection)
+		{
+		if(err!=null) 
+			{
+			console.log("err:"+err);
+			printer.error(err);
+			return;
+			}
+		
+		var query= connection.query("show databases");
+		
+		query.on('error',function(err)
+			{
+			printer.error(err);
+			})	
+			.on('field',function(fields)
+			{
+			//nothing
+			})
+			.on('result',function(row)
+			{
+			//just print the name of the database
+			for(var k in row) { printer.next(row[k]); break;}
+			})
+			.on('end',function()
+			{
+			printer.close();
+			connection.release();
+			});
+	
+		});
+	});
+
+
+/** get all tables for a given databases */
+server.get('/schemas/:database/tables', function(req,res,next)
+	{
+	var printer=new PrintRows(res);
+	printer.callback=req.params.callback;
+	console.log("getting table list");
+	connectionPool.getConnection(function(err,connection)
+		{
+		if(err!=null) 
+			{
+			console.log("err:"+err);
+			printer.error(err);
+			return;
+			}
+		
+		var query= connection.query("show tables from "+req.params.database);
+		
+		query.on('error',function(err)
+			{
+			printer.error(err);
+			})	
+			.on('field',function(fields)
+			{
+			//nothing
+			})
+			.on('result',function(row)
+			{
+			//just print the name of the database
+			for(var k in row) { printer.next(row[k]); break;}
+			})
+			.on('end',function()
+			{
+			printer.close();
+			connection.release();
+			});
+	
+		});
+	});
+
+/** callback for get table description */
 server.get('/schemas/:database/:table', function(req,res,next)
 	{
+	console.log("getting schema for database/table");
+	var callback=req.params.callback;
 	var table=new Schema(req.params.database,req.params.table);
 	Schema.get(table,function(err,t)
 		{
@@ -306,15 +453,18 @@ server.get('/schemas/:database/:table', function(req,res,next)
 			res.send(err);
 			return;
 			}
-		console.log("t="+t);
-		res.writeHead(200, {"Content-Type": "application/json"});
-		res.end(JSON.stringify(t));
+		res.writeHead(200, {"Content-Type":(callback? "application/javascript" : "application/json")});
+		if(callback) res.write(callback+"(");
+		res.write(JSON.stringify(t));
+		if(callback) res.write(");");
+		res.end();
 		});
 	});
 
+/** callback for get field by name */
 server.get('/ucsc/:database/:table/:column/:key', function(req,res,next)
 	{
-
+	console.log("getting database: field by name");
 	var table=new Schema(req.params.database,req.params.table);
 	Schema.get(table,function(err,t)
 		{
@@ -327,13 +477,16 @@ server.get('/ucsc/:database/:table/:column/:key', function(req,res,next)
 		t.selectByColumn(
 			req.params.column,
 			req.params.key,
+			req.params.callback,
 			res);
 		});
 	});
 
+
+/** callback for data by range */
 server.get('/ucsc/:database/:table', function(req,res,next)
 	{
-
+	console.log("getting database: field by range");
 	var table=new Schema(req.params.database,req.params.table);
 	Schema.get(table,function(err,t)
 		{
@@ -370,6 +523,7 @@ server.get('/ucsc/:database/:table', function(req,res,next)
 			}
 		t.selectByRange(
 			range,
+			req.params.callback,
 			res);
 		});
 	});
